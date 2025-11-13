@@ -30,10 +30,9 @@ class PacmanAgent(BasePacmanAgent):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.name = "A* Pacman Hunter"
+        # Lưu pacman_speed từ kwargs
+        self.pacman_speed = kwargs.get('pacman_speed', 1)
 
-    # =====================================================
-    # HÀM CHÍNH: ĐƯỢC GỌI MỖI LƯỢT DI CHUYỂN
-    # =====================================================
     def step(self, map_state, my_position, enemy_position, step_number):
         """
         Hàm quyết định hướng di chuyển mỗi bước.
@@ -41,19 +40,18 @@ class PacmanAgent(BasePacmanAgent):
         - Có giới hạn thời gian tối đa 1 giây cho mỗi bước.
         """
 
-        start_time = time.time()  # Ghi nhận thời điểm bắt đầu để giới hạn thời gian
+        start_time = time.time()
 
         # Tìm đường đi ngắn nhất bằng A*
         path = self.a_star_search(map_state, my_position, enemy_position, start_time)
 
         # Nếu tìm được đường đi hợp lệ (ít nhất 2 ô: hiện tại + bước kế tiếp)
         if path and len(path) > 1:
-            next_pos = path[1]  # Lấy bước kế tiếp để di chuyển
-
-            # =====================================================
-            #  NGĂN XUYÊN QUA NHAU (SWAP COLLISION)
-            # =====================================================
-            # Dự đoán các ô mà Ghost có thể di chuyển đến trong lượt tiếp theo
+            # Thay vì chỉ lấy path[1], lấy NHIỀU bước theo pacman_speed
+            moves_on_path = self._extract_moves_from_path(path, my_position)
+            
+            # Kiểm tra swap collision cho bước đầu tiên
+            first_next_pos = path[1]
             enemy_next_positions = []
             for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
                 dr, dc = move.value
@@ -61,19 +59,49 @@ class PacmanAgent(BasePacmanAgent):
                 if self._is_valid_position(new_enemy_pos, map_state):
                     enemy_next_positions.append(new_enemy_pos)
 
-            # 1️⃣ Nếu Pacman định đi vào đúng ô Ghost đang đứng
-            # 2️⃣ Hoặc Pacman và Ghost cùng đổi vị trí trong cùng một lượt
-            if next_pos == enemy_position or (
-                my_position in enemy_next_positions and enemy_position == next_pos
+            if first_next_pos == enemy_position or (
+                my_position in enemy_next_positions and enemy_position == first_next_pos
             ):
-                # Khi đó Pacman sẽ đứng yên để tránh “xuyên qua nhau”
                 return Move.STAY
 
-            # Di chuyển theo hướng từ vị trí hiện tại đến vị trí kế tiếp
-            return self._position_to_move(my_position, next_pos)
+            # Trả về list moves hoặc tuple (direction, distance)
+            return moves_on_path
 
         # Nếu không tìm thấy đường hợp lệ trong 1s → dùng chiến lược đuổi "tham lam"
         return self._greedy_chase(map_state, my_position, enemy_position)
+    
+    def _extract_moves_from_path(self, path, start_pos):
+        """
+        Trích xuất tối đa pacman_speed bước CÙNG HƯỚNG từ path
+        
+        Returns:
+            - Nếu có nhiều bước cùng hướng: tuple (Move, distance)
+            - Nếu chỉ 1 bước hoặc đổi hướng: Move đơn
+        """
+        if len(path) <= 1:
+            return Move.STAY
+        
+        # Lấy hướng đầu tiên
+        first_direction = self._position_to_move(path[0], path[1])
+        
+        # Đếm xem có bao nhiêu bước liên tiếp cùng hướng này
+        consecutive_count = 1
+        
+        for i in range(2, min(len(path), self.pacman_speed + 1)):
+            current_dir = self._position_to_move(path[i-1], path[i])
+            if current_dir == first_direction:
+                consecutive_count += 1
+            else:
+                break  # Đổi hướng thì dừng
+        
+        # Trả về theo format mà validate_agent_move mong đợi
+        if consecutive_count > 1:
+        # Trả tuple (Move, distance) để di chuyển nhiều ô
+            return (first_direction, consecutive_count)
+        else:
+            # Trả Move đơn
+            return first_direction
+
 
     # =====================================================
     # THUẬT TOÁN A* (A STAR SEARCH)
