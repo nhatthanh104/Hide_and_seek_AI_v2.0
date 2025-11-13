@@ -1,0 +1,34 @@
+Batch run started: Fri, Nov 14, 2025  1:42:39 AM
+Matchup: Pacman='example_student' vs Ghost='thanh_agent'
+Total runs: 20
+----------------------------------------
+
+Game 1: pacman_wins
+Game 2: ghost_wins
+Game 3: pacman_wins
+Game 4: pacman_wins
+Game 5: ghost_wins
+Game 6: pacman_wins
+Game 7: pacman_wins
+Game 8: pacman_wins
+Game 9: pacman_wins
+Game 10: pacman_wins
+Game 11: pacman_wins
+Game 12: ghost_wins
+Game 13: pacman_wins
+Game 14: ghost_wins
+Game 15: pacman_wins
+Game 16: pacman_wins
+Game 17: pacman_wins
+Game 18: pacman_wins
+Game 19: ghost_wins
+Game 20: pacman_wins
+
+----------------------------------------
+FINAL STATISTICS:
+Total games    : 20
+Pacman wins    : 15 (75.0%)
+Ghost wins     : 5 (25.0%)
+Draws          : 0 (0.0%)
+Errors         : 0
+Batch run finished: Fri, Nov 14, 2025  1:42:47 AM
