@@ -10,6 +10,7 @@ CAPTURE_DISTANCE="${CAPTURE_DISTANCE:-2}"
 PACMAN_SPEED="${PACMAN_SPEED:-2}"
 
 
+
 # Auto-detect Python command
 # Try to find Python in conda env or system Python
 PYTHON_CMD=""
@@ -50,16 +51,34 @@ output="$(cd src && $PYTHON_CMD arena.py \
     $( [ "$NO_VIZ" = true ] && echo --no-viz ) 2>&1)"
 
 # Parse result - check các pattern trong arena.py's display_results()
-# Try multiple patterns to match output
+# Extract winner and total steps
+
+# Determine winner
+winner=""
 if echo "$output" | grep -q "(Pacman)"; then
-    echo "pacman_wins"
+    winner="pacman_wins"
 elif echo "$output" | grep -q "(Ghost)"; then
-    echo "ghost_wins"
+    winner="ghost_wins"
 elif echo "$output" | grep -qi "draw"; then
-    echo "draw"
+    winner="draw"
 else
-    echo "error"
-    # Print output for debugging
+    winner="error"
+fi
+
+# Extract total steps from output
+# Pattern: "  Total Steps: 42"
+total_steps=$(echo "$output" | grep -i "Total Steps:" | sed -E 's/.*Total Steps:\s*([0-9]+).*/\1/')
+
+# If steps not found, set to -1
+if [ -z "$total_steps" ]; then
+    total_steps="-1"
+fi
+
+# Output format: winner:steps
+echo "${winner}:${total_steps}"
+
+# Debug output if error
+if [ "$winner" = "error" ]; then
     echo "=== DEBUG: Could not parse winner from output ===" >&2
     echo "$output" >&2
     echo "=== END DEBUG ===" >&2
