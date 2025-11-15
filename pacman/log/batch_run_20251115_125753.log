@@ -1,0 +1,25 @@
+Batch run started: Sat, Nov 15, 2025 12:57:53 PM
+Matchup: Pacman='example_student' vs Ghost='example_student'
+Total runs: 10
+----------------------------------------
+
+Game 1: pacman_wins (Steps: 16)
+Game 2: pacman_wins (Steps: 28)
+Game 3: pacman_wins (Steps: 10)
+Game 4: pacman_wins (Steps: 50)
+Game 5: pacman_wins (Steps: 34)
+Game 6: pacman_wins (Steps: 10)
+Game 7: pacman_wins (Steps: 10)
+Game 8: pacman_wins (Steps: 26)
+Game 9: pacman_wins (Steps: 12)
+Game 10: pacman_wins (Steps: 10)
+
+----------------------------------------
+FINAL STATISTICS:
+Total games    : 10
+Pacman wins    : 10 (100.0%)
+Ghost wins     : 0 (0.0%)
+Draws          : 0 (0.0%)
+Errors         : 0
+Avg steps      : 20.6
+Batch run finished: Sat, Nov 15, 2025 12:58:06 PM

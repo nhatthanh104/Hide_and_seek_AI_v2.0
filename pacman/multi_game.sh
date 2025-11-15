@@ -13,6 +13,8 @@ pacman_wins=0
 ghost_wins=0
 draws=0
 errors=0
+total_steps=0
+game_count=0
 
 # Initialize logfile
 echo "Batch run started: $(date)" > "$LOGFILE"
@@ -32,14 +34,24 @@ for i in $(seq 1 "$RUNS"); do
         echo "Progress: $i/$RUNS games completed..."
     fi
     
-    # Run one game and capture result
+    # Run one game and capture result (format: winner:steps)
     result=$(./get_result.sh "$SEEKER" "$HIDER" 2>&1)
     
+    # Parse winner and steps
+    winner=$(echo "$result" | cut -d':' -f1)
+    steps=$(echo "$result" | cut -d':' -f2)
+    
     # Log the result
-    echo "Game $i: $result" >> "$LOGFILE"
+    echo "Game $i: $winner (Steps: $steps)" >> "$LOGFILE"
+    
+    # Accumulate total steps if valid
+    if [[ "$steps" =~ ^[0-9]+$ ]]; then
+        total_steps=$((total_steps + steps))
+        game_count=$((game_count + 1))
+    fi
     
     # Count results
-    case "$result" in
+    case "$winner" in
         pacman_wins)
             pacman_wins=$((pacman_wins+1))
             ;;
@@ -65,6 +77,13 @@ pacman_pct=$(awk "BEGIN {printf \"%.1f\", ($pacman_wins/$RUNS)*100}")
 ghost_pct=$(awk "BEGIN {printf \"%.1f\", ($ghost_wins/$RUNS)*100}")
 draw_pct=$(awk "BEGIN {printf \"%.1f\", ($draws/$RUNS)*100}")
 
+# Calculate average steps
+if [ $game_count -gt 0 ]; then
+    avg_steps=$(awk "BEGIN {printf \"%.1f\", ($total_steps/$game_count)}")
+else
+    avg_steps="N/A"
+fi
+
 # Print summary to console
 echo "========================================="
 echo "         STATISTICS SUMMARY"
@@ -74,6 +93,7 @@ echo "Pacman wins    : $pacman_wins ($pacman_pct%)"
 echo "Ghost wins     : $ghost_wins ($ghost_pct%)"
 echo "Draws          : $draws ($draw_pct%)"
 echo "Errors         : $errors"
+echo "Avg steps      : $avg_steps"
 echo "========================================="
 echo ""
 echo "Detailed log saved to: $LOGFILE"
@@ -87,4 +107,5 @@ echo "Pacman wins    : $pacman_wins ($pacman_pct%)" >> "$LOGFILE"
 echo "Ghost wins     : $ghost_wins ($ghost_pct%)" >> "$LOGFILE"
 echo "Draws          : $draws ($draw_pct%)" >> "$LOGFILE"
 echo "Errors         : $errors" >> "$LOGFILE"
+echo "Avg steps      : $avg_steps" >> "$LOGFILE"
 echo "Batch run finished: $(date)" >> "$LOGFILE"
