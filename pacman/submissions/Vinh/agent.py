@@ -201,33 +201,11 @@ class PacmanAgent(BasePacmanAgent):
 
 class GhostAgent(BaseGhostAgent):
     """
-    Ghost (Hider) Agent - né Pacman greedy multi-step tối đa có thể.;
-
-    Chiến lược:
-    - GẦN Pacman (<=6): dùng Minimax với:
-        + Ghost MAXIMIZE an toàn (khoảng cách + lối thoát).
-        + Pacman được mô phỏng theo đúng chiến lược greedy (multi-step).
-        + Bất kỳ state nào có Manhattan <= 1 là THUA (score cực âm).
-    - XA Pacman (>6): dùng BFS tìm vùng xa & nhiều lối thoát, nhưng dùng
-      vị trí Pacman DỰ ĐOÁN chứ không phải vị trí hiện tại.
+    Ghost (Hider) Agent - Tối ưu né Pac-Man với chiến lược hybrid (heuristic + minimax đánh giá thời gian sống sót).
     """
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-
-        # Học dần speed thật của Pacman
-        self.estimated_pacman_speed = 1
-        # Luật: Manhattan <= 1 coi như thua
-        self.lose_distance = 1
-
-        # Vùng nguy hiểm theo khoảng cách
-        self.close_danger_radius = 6
-        self.medium_danger_radius = 10
-
-        # Lưu vị trí Pacman bước trước để ước lượng speed
-        self._last_enemy_position = None
-
-    # ================== STEP CHÍNH ==================
 
     def step(
         self,
@@ -236,419 +214,128 @@ class GhostAgent(BaseGhostAgent):
         enemy_position: tuple,
         step_number: int,
     ) -> Move:
+        from collections import deque
 
-        # Cập nhật ước lượng pacman_speed từ chuyển động thực tế
-        self._update_pacman_speed(enemy_position)
+        gx, gy = my_position
+        px, py = enemy_position
+        rows, cols = map_state.shape
 
-        distance_to_pacman = self._calculate_manhattan_distance(
-            my_position, enemy_position
-        )
+        def is_valid(pos):
+            x, y = pos
+            return 0 <= x < rows and 0 <= y < cols and map_state[x][y] == 0
 
-        # Vùng nguy hiểm : Nếu gần Pacman (<=6) → dùng Minimax để chọn nước đi tốt nhất
-        if distance_to_pacman <= self.close_danger_radius:
-            # Depth lớn hơn khi cực gần
-            if distance_to_pacman <= 3:
-                depth = 4
-            else:
-                depth = 3
-
-            score, best_move = self._minimax(
-                my_pos=my_position,
-                enemy_pos=enemy_position,
-                depth=depth,
-                is_ghost_turn=True,
-                map_state=map_state,
-            )
-
-            # Nếu minimax trả về move hợp lệ -> dùng
-            if best_move is not None and self._is_valid_move(
-                my_position, best_move, map_state
-            ):
-                return best_move
-
-            # Fallback nếu minimax thất bại
-            return self._greedy_escape(my_position, enemy_position, map_state)
-
-        # Vùng an toàn : Pacman XA (> 6 cells) → Dùng PREDICTIVE BFS
-        else:
-            # Bước 1 - Dự đoán Pacman sẽ ở đâu (multi-step)
-            predicted_enemy_pos = self._predict_enemy_position(
-                enemy_position, my_position, map_state
-            )
-
-            # Bước 2 - Tìm vị trí xa predicted position
-            safe_positions = self._find_safe_positions(
-                map_state, my_position, predicted_enemy_pos, top_k=5
-            )
-
-            if not safe_positions:
-                return self._greedy_escape(
-                    my_position, enemy_position, map_state
-                )
-
-            # Bước 3 - Chọn vị trí có nhiều lối thoát nhất (giữa các vị trí xa)
-            best_position = max(
-                safe_positions,
-                key=lambda pos: self._count_escape_routes(pos, map_state),
-            )
-
-            # Bước 4 - Di chuyển đến vị trí đó
-            next_move = self._get_next_move(
-                my_position, best_position, map_state
-            )
-
-            return next_move if next_move else Move.STAY
-
-    # ================== MODEL PACMAN ==================
-
-    def _update_pacman_speed(self, current_enemy_pos: tuple):
-        """
-        Mỗi bước, từ 2 vị trí Pacman liên tiếp, ước lượng pacman_speed
-        (distance chính là số ô Pacman đi vì Pacman đi thẳng 1 hướng).
-        """
-        if self._last_enemy_position is not None:
-            dist = self._calculate_manhattan_distance(
-                self._last_enemy_position, current_enemy_pos
-            )
-            if dist > self.estimated_pacman_speed:
-                # Giới hạn nhẹ cho an toàn (không quá to)
-                self.estimated_pacman_speed = min(dist, 4)
-        self._last_enemy_position = current_enemy_pos
-
-    def _predict_enemy_position(
-        self, enemy_pos: tuple, my_pos: tuple, map_state: np.ndarray
-    ) -> tuple:
-        """
-        Mô phỏng Pacman sẽ đi đâu bước tới theo chiến lược greedy multi-step,
-        giống với PacmanAgent:
-        - Tính row_diff, col_diff = ghost - pacman
-        - Ưu tiên di chuyển theo trục giúp lại gần Ghost
-        - desired_steps = abs(row_diff/col_diff)
-        - Giới hạn số bước bởi estimated_pacman_speed
-        """
-
-        pr, pc = enemy_pos
-        gr, gc = my_pos
-
-        row_diff = gr - pr
-        col_diff = gc - pc
-
-        preferred_moves = []
-
-        # Ưu tiên dọc
-        if row_diff > 0:
-            preferred_moves.append(Move.DOWN)
-        elif row_diff < 0:
-            preferred_moves.append(Move.UP)
-
-        # Sau đó ngang
-        if col_diff > 0:
-            preferred_moves.append(Move.RIGHT)
-        elif col_diff < 0:
-            preferred_moves.append(Move.LEFT)
-
-        # Thử các hướng ưu tiên (giống PacmanAgent)
-        for move in preferred_moves:
-            desired_steps = self._desired_steps_for_pacman(
-                move, row_diff, col_diff
-            )
-            steps = self._max_valid_steps_for_pacman(
-                enemy_pos, move, map_state, desired_steps
-            )
-            if steps > 0:
-                return self._apply_steps(enemy_pos, move, steps)
-
-        # Fallback: thử 4 hướng, chọn hướng giảm khoảng cách nhiều nhất
-        best_pos = enemy_pos
-        best_dist = self._calculate_manhattan_distance(enemy_pos, my_pos)
-
-        for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
-            steps = self._max_valid_steps_for_pacman(
-                enemy_pos, move, map_state, self.estimated_pacman_speed
-            )
-            if steps <= 0:
-                continue
-            candidate = self._apply_steps(enemy_pos, move, steps)
-            d = self._calculate_manhattan_distance(candidate, my_pos)
-            if d < best_dist:
-                best_dist = d
-                best_pos = candidate
-
-        return best_pos
-
-    def _desired_steps_for_pacman(
-        self, move: Move, row_diff: int, col_diff: int
-    ) -> int:
-        """Giống PacmanAgent._desired_steps."""
-        if move in (Move.UP, Move.DOWN):
-            return abs(row_diff)
-        if move in (Move.LEFT, Move.RIGHT):
-            return abs(col_diff)
-        return 1
-
-    def _max_valid_steps_for_pacman(
-        self,
-        pos: tuple,
-        move: Move,
-        map_state: np.ndarray,
-        desired_steps: int,
-    ) -> int:
-        """
-        Giống PacmanAgent._max_valid_steps nhưng dùng estimated_pacman_speed.
-        """
-        steps = 0
-        max_steps = min(self.estimated_pacman_speed, max(1, desired_steps))
-        current = pos
-        for _ in range(max_steps):
-            dr, dc = move.value
-            next_pos = (current[0] + dr, current[1] + dc)
-            if not self._is_valid_position(next_pos, map_state):
-                break
-            steps += 1
-            current = next_pos
-        return steps
-
-    def _apply_steps(self, pos: tuple, move: Move, steps: int) -> tuple:
-        dr, dc = move.value
-        return (pos[0] + dr * steps, pos[1] + dc * steps)
-
-    # ================== MINIMAX ==================
-
-    def _evaluate_state(self, my_pos: tuple, enemy_pos: tuple, map_state):
-        """
-        Hàm heuristic đánh giá state cho Ghost:
-        - Bị bắt (dist <= 1) → -1e6
-        - Ưu tiên:
-            + Khoảng cách lớn
-            + Nhiều lối thoát
-        - Phạt:
-            + dist = 2 hoặc 3 (siêu nguy hiểm)
-            + Ngõ cụt (escape_routes <= 1)
-            + Cùng hàng/cột khi khoảng cách chưa đủ xa
-        """
-        dist = self._calculate_manhattan_distance(my_pos, enemy_pos)
-
-        if dist <= self.lose_distance:
-            return -1_000_000
-
-        escape_routes = self._count_escape_routes(my_pos, map_state)
-        dead_end = escape_routes <= 1
-
-        score = 0.0
-
-        # An toàn gần: dist = 2 hoặc 3 vẫn cực kỳ nguy hiểm
-        if dist == 2:
-            score -= 800
-        elif dist == 3:
-            score -= 300
-
-        # Khoảng cách càng xa càng tốt
-        score += 50.0 * dist
-
-        # Lối thoát nhiều thì tốt
-        score += 40.0 * escape_routes
-
-        # Ngõ cụt rất xấu, đặc biệt khi Pacman không xa
-        if dead_end:
-            score -= 200.0
-            if dist <= self.medium_danger_radius:
-                score -= 200.0
-
-        # Tránh đứng cùng hàng/cột với Pacman khi còn tương đối gần
-        same_row_or_col = my_pos[0] == enemy_pos[0] or my_pos[1] == enemy_pos[1]
-        if same_row_or_col and dist <= (self.estimated_pacman_speed * 3 + 2):
-            score -= 150.0
-
-        return score
-
-    def _minimax(
-        self,
-        my_pos: tuple,
-        enemy_pos: tuple,
-        depth: int,
-        is_ghost_turn: bool,
-        map_state: np.ndarray,
-    ):
-        """
-        Minimax cho Ghost.
-
-        Ghost (MAX) = tránh bị bắt, tăng khoảng cách + lối thoát.
-        Pacman (MIN) = được mô phỏng theo chiến lược greedy multi-step
-                       nên lượt Pacman là DETERMINISTIC (không nhánh).
-        """
-
-        dist = self._calculate_manhattan_distance(my_pos, enemy_pos)
-
-        # THUA theo luật: khoảng cách <= 1
-        if dist <= self.lose_distance:
-            return -1_000_000, Move.STAY
-
-        # Hết depth → đánh giá heuristic
-        if depth == 0:
-            return self._evaluate_state(my_pos, enemy_pos, map_state), Move.STAY
-
-        if is_ghost_turn:
-            best_score = -float("inf")
-            best_move = None
-
-            # Cho Ghost thử 4 hướng + STAY
-            candidate_moves = [
-                Move.STAY,
-                Move.UP,
-                Move.DOWN,
-                Move.LEFT,
-                Move.RIGHT,
-            ]
-
-            for move in candidate_moves:
-                if move == Move.STAY:
-                    new_pos = my_pos
-                else:
-                    dr, dc = move.value
-                    new_pos = (my_pos[0] + dr, my_pos[1] + dc)
-
-                if move != Move.STAY and not self._is_valid_position(
-                    new_pos, map_state
-                ):
-                    continue
-
-                score, _ = self._minimax(
-                    new_pos,
-                    enemy_pos,
-                    depth - 1,
-                    False,  # tới lượt Pacman
-                    map_state,
-                )
-
-                if score > best_score:
-                    best_score = score
-                    best_move = move
-
-            if best_move is None:
-                # Không có nước đi hợp lệ → đứng yên, đánh giá luôn
-                return (
-                    self._evaluate_state(my_pos, enemy_pos, map_state),
-                    Move.STAY,
-                )
-
-            return best_score, best_move
-
-        else:
-            # Lượt Pacman: chỉ MỘT state kế tiếp, mô phỏng greedy multi-step
-            next_enemy_pos = self._predict_enemy_position(
-                enemy_pos, my_pos, map_state
-            )
-            score, _ = self._minimax(
-                my_pos,
-                next_enemy_pos,
-                depth - 1,
-                True,
-                map_state,
-            )
-            return score, Move.STAY
-
-    # ================== HELPER GỐC (giữ & dùng lại) ==================
-
-    def _is_valid_move(
-        self, pos: tuple, move: Move, map_state: np.ndarray
-    ) -> bool:
-        delta_row, delta_col = move.value
-        new_pos = (pos[0] + delta_row, pos[1] + delta_col)
-        return self._is_valid_position(new_pos, map_state)
-
-    def _is_valid_position(self, pos: tuple, map_state: np.ndarray) -> bool:
-        row, col = pos
-        height, width = map_state.shape
-
-        if row < 0 or row >= height or col < 0 or col >= width:
+        def in_line_of_sight(gx, gy, px, py):
+            if gx == px:
+                step = 1 if py > gy else -1
+                for y in range(gy + step, py, step):
+                    if not is_valid((gx, y)):
+                        return False
+                return True
+            elif gy == py:
+                step = 1 if px > gx else -1
+                for x in range(gx + step, px, step):
+                    if not is_valid((x, gy)):
+                        return False
+                return True
             return False
 
-        return map_state[row, col] == 0
+        def bfs_distance(start, goal):
+            if start == goal:
+                return 0
+            visited = [[False] * cols for _ in range(rows)]
+            q = deque([(start[0], start[1], 0)])
+            visited[start[0]][start[1]] = True
+            while q:
+                cx, cy, dist = q.popleft()
+                for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nx, ny = cx + dx, cy + dy
+                    if (
+                        0 <= nx < rows
+                        and 0 <= ny < cols
+                        and not visited[nx][ny]
+                        and is_valid((nx, ny))
+                    ):
+                        if (nx, ny) == goal:
+                            return dist + 1
+                        visited[nx][ny] = True
+                        q.append((nx, ny, dist + 1))
+            return float("inf")
 
-    def _calculate_manhattan_distance(self, pos1, pos2):
-        return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
+        def simulate_pacman(pos, direction, steps):
+            x, y = pos
+            for _ in range(steps):
+                nx, ny = x + direction[0], y + direction[1]
+                if not is_valid((nx, ny)):
+                    break
+                x, y = nx, ny
+            return (x, y)
 
-    def _find_safe_positions(self, map_state, my_pos, enemy_pos, top_k=5):
-        visited = set()
-        queue = deque([(my_pos, 0)])
-        visited.add(my_pos)
-        positions_with_distance = []
-
-        while queue:
-            current_pos, dist_from_start = queue.popleft()
-
-            dist_to_enemy = self._calculate_manhattan_distance(
-                current_pos, enemy_pos
-            )
-            positions_with_distance.append((current_pos, dist_to_enemy))
-
-            for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
-                dr, dc = move.value
-                new_pos = (current_pos[0] + dr, current_pos[1] + dc)
-
-                if new_pos not in visited and self._is_valid_position(
-                    new_pos, map_state
-                ):
-                    visited.add(new_pos)
-                    queue.append((new_pos, dist_from_start + 1))
-
-        positions_with_distance.sort(key=lambda x: x[1], reverse=True)
-        return [pos for pos, dist in positions_with_distance[:top_k]]
-
-    def _count_escape_routes(self, pos, map_state):
-        count = 0
-        for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
-            dr, dc = move.value
-            neighbor_pos = (pos[0] + dr, pos[1] + dc)
-            if self._is_valid_position(neighbor_pos, map_state):
-                count += 1
-        return count
-
-    def _get_next_move(self, start, goal, map_state):
-        if start == goal:
+        def get_direction(from_pos, to_pos):
+            dx = to_pos[0] - from_pos[0]
+            dy = to_pos[1] - from_pos[1]
+            if dx == 1:
+                return Move.DOWN
+            if dx == -1:
+                return Move.UP
+            if dy == 1:
+                return Move.RIGHT
+            if dy == -1:
+                return Move.LEFT
             return Move.STAY
 
-        visited = {start}
-        queue = deque([(start, [])])
+        # --- 1. Né đường thẳng nguy hiểm ---
+        danger_dist = 2
+        if (
+            in_line_of_sight(gx, gy, px, py)
+            and abs(gx - px) + abs(gy - py) <= danger_dist
+        ):
+            perp_moves = [(1, 0), (-1, 0)] if gx == px else [(0, 1), (0, -1)]
+            for dx, dy in perp_moves:
+                nx, ny = gx + dx, gy + dy
+                if is_valid((nx, ny)):
+                    return get_direction((gx, gy), (nx, ny))
 
-        while queue:
-            pos, path = queue.popleft()
+        # --- 2. Né ngõ cụt ---
+        valid_neighbors = [
+            (gx + dx, gy + dy)
+            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]
+            if is_valid((gx + dx, gy + dy))
+        ]
+        if len(valid_neighbors) == 1 and abs(gx - px) + abs(gy - py) <= 4:
+            return get_direction((gx, gy), valid_neighbors[0])
 
-            for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
-                dr, dc = move.value
-                new_pos = (pos[0] + dr, pos[1] + dc)
+        # --- 3. Maximin sống sót ---
+        possible_moves = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)]
+        best_move = (0, 0)
+        max_survival = -float("inf")
 
-                if new_pos == goal and self._is_valid_position(
-                    new_pos, map_state
-                ):
-                    if path:
-                        return path[0]
-                    else:
-                        return move
+        pac_dirs = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        pacman_moves = [d for d in pac_dirs if is_valid((px + d[0], py + d[1]))]
 
-                if new_pos not in visited and self._is_valid_position(
-                    new_pos, map_state
-                ):
-                    visited.add(new_pos)
-                    new_path = path + [move]
-                    queue.append((new_pos, new_path))
+        straight_move = None
+        if step_number > 1 and hasattr(self, "prev_enemy_pos"):
+            dx = px - self.prev_enemy_pos[0]
+            dy = py - self.prev_enemy_pos[1]
+            if (dx, dy) in pacman_moves:
+                straight_move = (dx, dy)
 
-        return Move.STAY
+        for dx, dy in possible_moves:
+            nx, ny = gx + dx, gy + dy
+            if not is_valid((nx, ny)):
+                continue
+            ghost_next = (nx, ny)
+            worst_time = float("inf")
+            for pdx, pdy in pacman_moves:
+                steps = 2 if (pdx, pdy) == straight_move else 1
+                pac_next = simulate_pacman((px, py), (pdx, pdy), steps)
+                if pac_next == ghost_next:
+                    time = 0
+                else:
+                    time = bfs_distance(ghost_next, pac_next)
+                worst_time = min(worst_time, time)
+            if worst_time > max_survival:
+                max_survival = worst_time
+                best_move = (dx, dy)
 
-    def _greedy_escape(self, my_pos, enemy_pos, map_state):
-        row_diff = my_pos[0] - enemy_pos[0]
-        col_diff = my_pos[1] - enemy_pos[1]
-
-        if abs(row_diff) > abs(col_diff):
-            move = Move.DOWN if row_diff > 0 else Move.UP
-        else:
-            move = Move.RIGHT if col_diff > 0 else Move.LEFT
-
-        if self._is_valid_move(my_pos, move, map_state):
-            return move
-
-        for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
-            if self._is_valid_move(my_pos, move, map_state):
-                return move
-
-        return Move.STAY
+        self.prev_enemy_pos = enemy_position
+        return get_direction((gx, gy), (gx + best_move[0], gy + best_move[1]))
