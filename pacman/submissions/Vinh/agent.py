@@ -201,11 +201,13 @@ class PacmanAgent(BasePacmanAgent):
 
 class GhostAgent(BaseGhostAgent):
     """
-    Ghost (Hider) Agent - Tối ưu né Pac-Man với chiến lược hybrid (heuristic + minimax đánh giá thời gian sống sót).
+    Ghost (Hider) Agent - Tối ưu né Pac-Man với chiến lược hybrid
+    (heuristic + maximin đánh giá thời gian sống sót).
     """
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.prev_enemy_pos = None  # nhớ bước trước của Pacman
 
     def step(
         self,
@@ -224,17 +226,27 @@ class GhostAgent(BaseGhostAgent):
             x, y = pos
             return 0 <= x < rows and 0 <= y < cols and map_state[x][y] == 0
 
-        def in_line_of_sight(gx, gy, px, py):
-            if gx == px:
-                step = 1 if py > gy else -1
-                for y in range(gy + step, py, step):
-                    if not is_valid((gx, y)):
+        def get_neighbors(pos):
+            x, y = pos
+            res = []
+            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nx, ny = x + dx, y + dy
+                if is_valid((nx, ny)):
+                    res.append((nx, ny))
+            return res
+
+        def in_line_of_sight(ax, ay, bx, by):
+            # cùng hàng/cột và không có tường ngăn
+            if ax == bx:
+                step = 1 if by > ay else -1
+                for y in range(ay + step, by, step):
+                    if not is_valid((ax, y)):
                         return False
                 return True
-            elif gy == py:
-                step = 1 if px > gx else -1
-                for x in range(gx + step, px, step):
-                    if not is_valid((x, gy)):
+            elif ay == by:
+                step = 1 if bx > ax else -1
+                for x in range(ax + step, bx, step):
+                    if not is_valid((x, ay)):
                         return False
                 return True
             return False
@@ -283,47 +295,55 @@ class GhostAgent(BaseGhostAgent):
                 return Move.LEFT
             return Move.STAY
 
+        # -------- 0. Thông tin khoảng cách hiện tại --------
+        manhattan_now = abs(gx - px) + abs(gy - py)
+
         # --- 1. Né đường thẳng nguy hiểm ---
-        danger_dist = 2
-        if (
-            in_line_of_sight(gx, gy, px, py)
-            and abs(gx - px) + abs(gy - py) <= danger_dist
-        ):
+        # tăng nhẹ ngưỡng để né sớm hơn một tí
+        danger_dist = 3
+        if in_line_of_sight(gx, gy, px, py) and manhattan_now <= danger_dist:
             perp_moves = [(1, 0), (-1, 0)] if gx == px else [(0, 1), (0, -1)]
             for dx, dy in perp_moves:
                 nx, ny = gx + dx, gy + dy
                 if is_valid((nx, ny)):
+                    self.prev_enemy_pos = enemy_position
                     return get_direction((gx, gy), (nx, ny))
 
-        # --- 2. Né ngõ cụt ---
-        valid_neighbors = [
-            (gx + dx, gy + dy)
-            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]
-            if is_valid((gx + dx, gy + dy))
-        ]
-        if len(valid_neighbors) == 1 and abs(gx - px) + abs(gy - py) <= 4:
+        # --- 2. Né ngõ cụt khi Pacman gần ---
+        valid_neighbors = get_neighbors((gx, gy))
+        if len(valid_neighbors) == 1 and manhattan_now <= 4:
+            self.prev_enemy_pos = enemy_position
             return get_direction((gx, gy), valid_neighbors[0])
 
-        # --- 3. Maximin sống sót ---
+        # --- 3. Maximin sống sót + tie-break bằng heuristic ---
         possible_moves = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)]
         best_move = (0, 0)
         max_survival = -float("inf")
+        best_heuristic = -float("inf")
 
         pac_dirs = [(1, 0), (-1, 0), (0, 1), (0, -1)]
         pacman_moves = [d for d in pac_dirs if is_valid((px + d[0], py + d[1]))]
+        if not pacman_moves:
+            pacman_moves = [(0, 0)]  # Pacman kẹt
 
         straight_move = None
-        if step_number > 1 and hasattr(self, "prev_enemy_pos"):
-            dx = px - self.prev_enemy_pos[0]
-            dy = py - self.prev_enemy_pos[1]
-            if (dx, dy) in pacman_moves:
-                straight_move = (dx, dy)
+        if (
+            step_number > 1
+            and hasattr(self, "prev_enemy_pos")
+            and self.prev_enemy_pos is not None
+        ):
+            dx_prev = px - self.prev_enemy_pos[0]
+            dy_prev = py - self.prev_enemy_pos[1]
+            if (dx_prev, dy_prev) in pacman_moves:
+                straight_move = (dx_prev, dy_prev)
 
         for dx, dy in possible_moves:
             nx, ny = gx + dx, gy + dy
-            if not is_valid((nx, ny)):
-                continue
             ghost_next = (nx, ny)
+            if not is_valid(ghost_next):
+                continue
+
+            # 3.1 tính worst_time như cũ (maximin)
             worst_time = float("inf")
             for pdx, pdy in pacman_moves:
                 steps = 2 if (pdx, pdy) == straight_move else 1
@@ -333,8 +353,39 @@ class GhostAgent(BaseGhostAgent):
                 else:
                     time = bfs_distance(ghost_next, pac_next)
                 worst_time = min(worst_time, time)
+
+            # 3.2 Heuristic phụ để phân biệt các move cùng worst_time
+            #    - xa Pacman hơn
+            #    - nhiều lối thoát hơn
+            #    - tránh hành lang thẳng
+            #    - tránh line-of-sight
+            manhattan_after = abs(nx - px) + abs(ny - py)
+            freedom = len(get_neighbors(ghost_next))
+
+            # hành lang thẳng: có đúng 2 neighbors và chúng cùng hàng/cột
+            neighs = get_neighbors(ghost_next)
+            corridor_penalty = 0
+            if len(neighs) == 2:
+                (x1, y1), (x2, y2) = neighs
+                if x1 == nx == x2 or y1 == ny == y2:
+                    corridor_penalty = 1  # phạt nhẹ
+
+            los_penalty = 1 if in_line_of_sight(nx, ny, px, py) else 0
+
+            heuristic = (
+                0.6 * manhattan_after  # xa Pacman
+                + 1.2 * freedom  # nhiều lối thoát
+                - 1.0 * corridor_penalty
+                - 1.5 * los_penalty
+            )
+
+            # 3.3 chọn move: ưu tiên worst_time, sau đó heuristic
             if worst_time > max_survival:
                 max_survival = worst_time
+                best_heuristic = heuristic
+                best_move = (dx, dy)
+            elif worst_time == max_survival and heuristic > best_heuristic:
+                best_heuristic = heuristic
                 best_move = (dx, dy)
 
         self.prev_enemy_pos = enemy_position
