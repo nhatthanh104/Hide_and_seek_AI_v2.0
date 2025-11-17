@@ -201,175 +201,13 @@ class PacmanAgent(BasePacmanAgent):
 
 class GhostAgent(BaseGhostAgent):
     """
-    Ghost (Hider) Agent - Planning evader:
-    - Mỗi bước nhìn trước nhiều bước tương lai (depth-limited search)
-    - Giả lập Pacman đuổi theo (greedy + speed 2)
-    - Chọn move tối đa hóa số bước sống sót
+    Ghost (Hider) Agent - Tối ưu né Pac-Man với chiến lược hybrid
+    (heuristic + maximin đánh giá thời gian sống sót).
     """
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.prev_pac_pos = None
-        # độ sâu lookahead (có thể tune: 5, 6, 7...)
-        self.search_depth = 6
-        # giới hạn thời gian mỗi bước (giảm nếu bị chậm)
-        self.time_limit = 0.03  # ~30ms
-
-    # ----------------- tiện ích cơ bản -----------------
-
-    def _is_valid(self, map_state, pos):
-        x, y = pos
-        rows, cols = map_state.shape
-        return 0 <= x < rows and 0 <= y < cols and map_state[x, y] == 0
-
-    def _neighbors4(self, map_state, pos):
-        x, y = pos
-        res = []
-        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            nx, ny = x + dx, y + dy
-            if self._is_valid(map_state, (nx, ny)):
-                res.append((nx, ny))
-        return res
-
-    def _manhattan(self, a, b):
-        return abs(a[0] - b[0]) + abs(a[1] - b[1])
-
-    def _get_direction(self, from_pos, to_pos):
-        fx, fy = from_pos
-        tx, ty = to_pos
-        dx, dy = tx - fx, ty - fy
-        if dx == 1:
-            return Move.DOWN
-        if dx == -1:
-            return Move.UP
-        if dy == 1:
-            return Move.RIGHT
-        if dy == -1:
-            return Move.LEFT
-        return Move.STAY
-
-    # ----------------- mô phỏng Pacman -----------------
-
-    def _simulate_pacman(self, map_state, pac_pos, ghost_pos, prev_dir):
-        """
-        Giả lập Pacman:
-        - Chọn hướng làm khoảng cách Manhattan tới ghost nhỏ nhất
-        - Nếu prev_dir vẫn hợp lệ và tiếp tục giảm khoảng cách → ưu tiên đi tiếp
-        - Đi thẳng tối đa 2 ô nếu không đụng tường
-        """
-        px, py = pac_pos
-
-        # candidate directions
-        dirs = [(-1, 0), (1, 0), (0, -1), (0, 1)]
-        best_dir = None
-        best_dist = float("inf")
-
-        # thử tiếp tục đi theo prev_dir nếu có
-        if prev_dir is not None:
-            dx, dy = prev_dir
-            nx, ny = px + dx, py + dy
-            if self._is_valid(map_state, (nx, ny)):
-                d = self._manhattan((nx, ny), ghost_pos)
-                best_dir = (dx, dy)
-                best_dist = d
-
-        # nếu không có prev_dir tốt → chọn lại greedy
-        for dx, dy in dirs:
-            nx, ny = px + dx, py + dy
-            if not self._is_valid(map_state, (nx, ny)):
-                continue
-            d = self._manhattan((nx, ny), ghost_pos)
-            if d < best_dist:
-                best_dist = d
-                best_dir = (dx, dy)
-
-        if best_dir is None:
-            # Pacman bị kẹt
-            return pac_pos, None
-
-        # di 1–2 ô theo best_dir
-        steps = 2  # speed 2
-        x, y = px, py
-        for _ in range(steps):
-            nx, ny = x + best_dir[0], y + best_dir[1]
-            if not self._is_valid(map_state, (nx, ny)):
-                break
-            x, y = nx, ny
-
-        return (x, y), best_dir
-
-    # ----------------- DFS planning -----------------
-
-    def _plan_dfs(
-        self,
-        map_state,
-        ghost_pos,
-        pac_pos,
-        depth,
-        prev_pac_dir,
-        start_time,
-        cache,
-    ):
-        """
-        Trả về: số bước sống sót kỳ vọng từ state này (kể cả step hiện tại trong DFS)
-        Ghost luôn chọn move tối đa hóa kết quả.
-        Pacman hành xử theo policy mô phỏng.
-        """
-        # cắt thời gian để tránh quá tải
-        if time.time() - start_time > self.time_limit:
-            # heuristic fallback: càng xa Pacman càng tốt
-            return max(1, self._manhattan(ghost_pos, pac_pos))
-
-        # nếu bị bắt rồi
-        if self._manhattan(ghost_pos, pac_pos) <= 1:
-            return 0
-
-        if depth == 0:
-            # sống được thêm 1 bước trong horizon
-            return 1
-
-        key = (ghost_pos, pac_pos, depth, prev_pac_dir)
-        if key in cache:
-            return cache[key]
-
-        max_survival = 0
-
-        # tất cả move ghost có thể đi
-        moves = [(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)]
-        for gdx, gdy in moves:
-            gx, gy = ghost_pos
-            ngx, ngy = gx + gdx, gy + gdy
-            new_ghost = (ngx, ngy)
-
-            if not self._is_valid(map_state, new_ghost):
-                continue
-
-            # Pacman di chuyển sau ghost
-            new_pac, new_dir = self._simulate_pacman(
-                map_state, pac_pos, new_ghost, prev_pac_dir
-            )
-
-            # nếu sau bước này bị bắt luôn
-            if self._manhattan(new_ghost, new_pac) <= 1:
-                survival = 1  # sống được 1 bước rồi chết
-            else:
-                survival = 1 + self._plan_dfs(
-                    map_state,
-                    new_ghost,
-                    new_pac,
-                    depth - 1,
-                    new_dir,
-                    start_time,
-                    cache,
-                )
-
-            if survival > max_survival:
-                max_survival = survival
-
-        cache[key] = max_survival
-        return max_survival
-
-    # ----------------- step chính -----------------
+        self.prev_enemy_pos = None  # nhớ bước trước của Pacman
 
     def step(
         self,
@@ -378,70 +216,178 @@ class GhostAgent(BaseGhostAgent):
         enemy_position: tuple,
         step_number: int,
     ) -> Move:
-
-        start_time = time.time()
-        cache = {}
+        from collections import deque
 
         gx, gy = my_position
         px, py = enemy_position
+        rows, cols = map_state.shape
 
-        # đoán hướng Pacman bước trước (nếu có)
-        prev_dir = None
-        if self.prev_pac_pos is not None:
-            dx = px - self.prev_pac_pos[0]
-            dy = py - self.prev_pac_pos[1]
-            if (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                prev_dir = (dx, dy)
+        def is_valid(pos):
+            x, y = pos
+            return 0 <= x < rows and 0 <= y < cols and map_state[x][y] == 0
 
-        best_move_vec = (0, 0)
-        best_value = -float("inf")
+        def get_neighbors(pos):
+            x, y = pos
+            res = []
+            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nx, ny = x + dx, y + dy
+                if is_valid((nx, ny)):
+                    res.append((nx, ny))
+            return res
 
-        # thử tất cả move có thể của ghost ở root
-        moves = [
-            (0, 0),
-            (-1, 0),
-            (1, 0),
-            (0, -1),
-            (0, 1),
-        ]
+        def in_line_of_sight(ax, ay, bx, by):
+            # cùng hàng/cột và không có tường ngăn
+            if ax == bx:
+                step = 1 if by > ay else -1
+                for y in range(ay + step, by, step):
+                    if not is_valid((ax, y)):
+                        return False
+                return True
+            elif ay == by:
+                step = 1 if bx > ax else -1
+                for x in range(ax + step, bx, step):
+                    if not is_valid((x, ay)):
+                        return False
+                return True
+            return False
 
-        for gdx, gdy in moves:
-            ngx, ngy = gx + gdx, gy + gdy
-            new_ghost = (ngx, ngy)
-            if not self._is_valid(map_state, new_ghost):
+        def bfs_distance(start, goal):
+            if start == goal:
+                return 0
+            visited = [[False] * cols for _ in range(rows)]
+            q = deque([(start[0], start[1], 0)])
+            visited[start[0]][start[1]] = True
+            while q:
+                cx, cy, dist = q.popleft()
+                for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nx, ny = cx + dx, cy + dy
+                    if (
+                        0 <= nx < rows
+                        and 0 <= ny < cols
+                        and not visited[nx][ny]
+                        and is_valid((nx, ny))
+                    ):
+                        if (nx, ny) == goal:
+                            return dist + 1
+                        visited[nx][ny] = True
+                        q.append((nx, ny, dist + 1))
+            return float("inf")
+
+        def simulate_pacman(pos, direction, steps):
+            x, y = pos
+            for _ in range(steps):
+                nx, ny = x + direction[0], y + direction[1]
+                if not is_valid((nx, ny)):
+                    break
+                x, y = nx, ny
+            return (x, y)
+
+        def get_direction(from_pos, to_pos):
+            dx = to_pos[0] - from_pos[0]
+            dy = to_pos[1] - from_pos[1]
+            if dx == 1:
+                return Move.DOWN
+            if dx == -1:
+                return Move.UP
+            if dy == 1:
+                return Move.RIGHT
+            if dy == -1:
+                return Move.LEFT
+            return Move.STAY
+
+        # -------- 0. Thông tin khoảng cách hiện tại --------
+        manhattan_now = abs(gx - px) + abs(gy - py)
+
+        # --- 1. Né đường thẳng nguy hiểm ---
+        # tăng nhẹ ngưỡng để né sớm hơn một tí
+        danger_dist = 3
+        if in_line_of_sight(gx, gy, px, py) and manhattan_now <= danger_dist:
+            perp_moves = [(1, 0), (-1, 0)] if gx == px else [(0, 1), (0, -1)]
+            for dx, dy in perp_moves:
+                nx, ny = gx + dx, gy + dy
+                if is_valid((nx, ny)):
+                    self.prev_enemy_pos = enemy_position
+                    return get_direction((gx, gy), (nx, ny))
+
+        # --- 2. Né ngõ cụt khi Pacman gần ---
+        valid_neighbors = get_neighbors((gx, gy))
+        if len(valid_neighbors) == 1 and manhattan_now <= 4:
+            self.prev_enemy_pos = enemy_position
+            return get_direction((gx, gy), valid_neighbors[0])
+
+        # --- 3. Maximin sống sót + tie-break bằng heuristic ---
+        possible_moves = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)]
+        best_move = (0, 0)
+        max_survival = -float("inf")
+        best_heuristic = -float("inf")
+
+        pac_dirs = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        pacman_moves = [d for d in pac_dirs if is_valid((px + d[0], py + d[1]))]
+        if not pacman_moves:
+            pacman_moves = [(0, 0)]  # Pacman kẹt
+
+        straight_move = None
+        if (
+            step_number > 1
+            and hasattr(self, "prev_enemy_pos")
+            and self.prev_enemy_pos is not None
+        ):
+            dx_prev = px - self.prev_enemy_pos[0]
+            dy_prev = py - self.prev_enemy_pos[1]
+            if (dx_prev, dy_prev) in pacman_moves:
+                straight_move = (dx_prev, dy_prev)
+
+        for dx, dy in possible_moves:
+            nx, ny = gx + dx, gy + dy
+            ghost_next = (nx, ny)
+            if not is_valid(ghost_next):
                 continue
 
-            # Pacman move sau root-move này
-            new_pac, new_dir = self._simulate_pacman(
-                map_state, enemy_position, new_ghost, prev_dir
+            # 3.1 tính worst_time như cũ (maximin)
+            worst_time = float("inf")
+            for pdx, pdy in pacman_moves:
+                steps = 2 if (pdx, pdy) == straight_move else 1
+                pac_next = simulate_pacman((px, py), (pdx, pdy), steps)
+                if pac_next == ghost_next:
+                    time = 0
+                else:
+                    time = bfs_distance(ghost_next, pac_next)
+                worst_time = min(worst_time, time)
+
+            # 3.2 Heuristic phụ để phân biệt các move cùng worst_time
+            #    - xa Pacman hơn
+            #    - nhiều lối thoát hơn
+            #    - tránh hành lang thẳng
+            #    - tránh line-of-sight
+            manhattan_after = abs(nx - px) + abs(ny - py)
+            freedom = len(get_neighbors(ghost_next))
+
+            # hành lang thẳng: có đúng 2 neighbors và chúng cùng hàng/cột
+            neighs = get_neighbors(ghost_next)
+            corridor_penalty = 0
+            if len(neighs) == 2:
+                (x1, y1), (x2, y2) = neighs
+                if x1 == nx == x2 or y1 == ny == y2:
+                    corridor_penalty = 1  # phạt nhẹ
+
+            los_penalty = 1 if in_line_of_sight(nx, ny, px, py) else 0
+
+            heuristic = (
+                0.6 * manhattan_after  # xa Pacman
+                + 1.2 * freedom  # nhiều lối thoát
+                - 1.0 * corridor_penalty
+                - 1.5 * los_penalty
             )
 
-            # nếu bị bắt ngay
-            if self._manhattan(new_ghost, new_pac) <= 1:
-                val = 1
-            else:
-                val = 1 + self._plan_dfs(
-                    map_state,
-                    new_ghost,
-                    new_pac,
-                    self.search_depth - 1,
-                    new_dir,
-                    start_time,
-                    cache,
-                )
+            # 3.3 chọn move: ưu tiên worst_time, sau đó heuristic
+            if worst_time > max_survival:
+                max_survival = worst_time
+                best_heuristic = heuristic
+                best_move = (dx, dy)
+            elif worst_time == max_survival and heuristic > best_heuristic:
+                best_heuristic = heuristic
+                best_move = (dx, dy)
 
-            # tie-break: nếu val bằng nhau, chọn move tăng khoảng cách hơn
-            if val > best_value:
-                best_value = val
-                best_move_vec = (gdx, gdy)
-            elif val == best_value:
-                # tie-break bằng khoảng cách Manhattan
-                old_target = (gx + best_move_vec[0], gy + best_move_vec[1])
-                if self._manhattan(new_ghost, enemy_position) > self._manhattan(
-                    old_target, enemy_position
-                ):
-                    best_move_vec = (gdx, gdy)
+        self.prev_enemy_pos = enemy_position
+        return get_direction((gx, gy), (gx + best_move[0], gy + best_move[1]))
 
-        self.prev_pac_pos = enemy_position
-        target_pos = (gx + best_move_vec[0], gy + best_move_vec[1])
-        return self._get_direction(my_position, target_pos)
